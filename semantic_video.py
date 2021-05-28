@@ -5,6 +5,10 @@ from matplotlib import pyplot as plt
 from matplotlib import pyplot as plt
 from PIL import Image
 import numpy as np
+from ensemble_boxes import *
+from effdet_old import get_efficientdet_config, EfficientDet, DetBenchEval
+from effdet_old.efficientdet import HeadNet
+import gc
 mean=[0.485, 0.456, 0.406]
 std=[0.229, 0.224, 0.225]
 model = torch.load('Unet-Mobilenet.pt')
@@ -17,21 +21,83 @@ with open('class_dict_seg.csv') as csvfile:
     for i,row in enumerate(code_reader):
         colors[i] = ((int(row[1]),int(row[2]),int(row[3])))
 
-def maskToCV(mask, colors):
-  cv_mask = np.zeros((512, 768, 3), dtype=np.uint8)
-  for label, color in colors.items():
-    cv_mask[mask == label] = color
-  return cv_mask
+
+def run_wbf(predictions, image_size=512, iou_thr=0.12, skip_box_thr=0.12, weights=None):
+  boxes = [(prediction['boxes'] / (image_size - 1)).tolist() for prediction in predictions]
+  scores = [prediction['scores'].tolist() for prediction in predictions]
+  labels = [prediction['labels'].tolist() for prediction in predictions]
+  boxes, scores, labels = weighted_boxes_fusion(boxes, scores, labels, weights=None, iou_thr=iou_thr,
+                                                skip_box_thr=skip_box_thr)
+  boxes = boxes * (image_size - 1)
+  return boxes, scores, labels
 
 def inf(img):
   t = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
   img = t(img)
-  img_patches = img.unfold(1, 512, 284).unfold(2, 768, 654)
-  img_patches = img_patches.contiguous().view(3, -1, 512, 768)
-  img_patches = img_patches.permute(1, 0, 2, 3)
+  #     img_patches = img.unfold(1, 512, 284).unfold(2, 768, 654)
+  #     img_patches  = img_patches.contiguous().view(3,-1, 512, 768)
+  #     img_patches = img_patches.permute(1,0,2,3)
+
   with torch.no_grad():
-    output = model(img_patches.to('cuda')).cpu()
-  return img_patches, output
+    output = model(img.unsqueeze(0).cuda()).cpu()
+  #         output = model(img_patches.to('cuda')).cpu()
+  return output
+
+def make_predictions(image, score_threshold=0.12):
+#     images = torch.stack(images).cuda().float()
+    image = image.cuda().float()
+    predictions = []
+    with torch.no_grad():
+        det = net(image, torch.tensor([1]*image.shape[0]).float().cuda())
+        for i in range(image.shape[0]):
+            boxes = det[i].detach().cpu().numpy()[:,:4]
+            scores = det[i].detach().cpu().numpy()[:,4]
+            labels = det[i].detach().cpu().numpy()[:,5]
+            indexes = np.where(scores > score_threshold)[0]
+            boxes = boxes[indexes]
+            boxes[:, 2] = boxes[:, 2] + boxes[:, 0]
+            boxes[:, 3] = boxes[:, 3] + boxes[:, 1]
+            predictions.append({
+                'boxes': boxes[indexes],
+                'scores': scores[indexes],
+                'labels': labels[indexes]
+            })
+    return predictions,det
+def maskToCV(mask, colors):
+  cv_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+  for label, color in colors.items():
+    cv_mask[mask == label] = color
+  return cv_mask
+
+def load_net(checkpoint_path):
+  config = get_efficientdet_config('tf_efficientdet_d0')
+  net = EfficientDet(config, pretrained_backbone=False)
+
+  config.num_classes = 6
+  config.image_size = 512
+  net.class_net = HeadNet(config, num_outputs=config.num_classes, norm_kwargs=dict(eps=.001, momentum=.01))
+
+  checkpoint = torch.load(checkpoint_path)
+  net.load_state_dict(checkpoint['model_state_dict'])
+
+  del checkpoint
+  gc.collect()
+
+  net = DetBenchEval(net, config)
+  net.eval()
+  return net.cuda()
+
+
+net = load_net('effdet0_loss_055_state_dict.pt')
+label_colors = {
+0: (255,0,0),
+1:(0,255,0),
+2: (0,0,255),
+ 3: (255,255,0),
+4:(0,255,255),
+5:(255,255,255)
+}
+t = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
 cap = cv2.VideoCapture('/home/ad/video.mov')
 # Check if camera opened successfully
 if (cap.isOpened()== False):
@@ -44,11 +110,34 @@ while(cap.isOpened()):
   if ret == True:
 
     # Display the resulting frame
-    cv2.imshow('Frame',frame)
-    img_patches, output = inf(frame)
-    masked = torch.argmax(output, dim=1)
-    # cv2.imshow('mask',masked[0].numpy())
 
+    frame = frame[:1024, :1024]
+    img = frame
+    # img = cv2.resize(img,(512,512))
+    image = t(frame)
+    batch = torch.zeros((4, 3, 512, 512), dtype=torch.float32)
+    batch[0] = image[:, :512, :512]
+    batch[1] = image[:, 512:1024, :512]
+    batch[2] = image[:, :512, 512:1024]
+    batch[3] = image[:, 512:1024, 512:1024]
+    batch = batch.cuda().float()
+    predictions, det = make_predictions(batch)
+    patch = [None, None, None, None]
+    patch[0] = frame[:512, :512]
+    patch[1] = frame[512:1024, :512]
+    patch[2] = frame[:512, 512:1024]
+    patch[3] = frame[512:1024, 512:1024]
+
+    for i in range(4):
+        boxes, scores, labels = run_wbf([predictions[i]])
+        boxes = boxes.astype(np.int32).clip(min=0, max=511)
+        for box, label in zip(boxes, labels):
+            cv2.rectangle(patch[i], (box[0], box[1]), (box[2], box[3]), label_colors[label], 1)
+
+    cv2.imshow('Frame', frame)
+    # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    output = inf(img)
+    masked = torch.argmax(output, dim=1)
     cv_mask = maskToCV(masked[0], colors)
     cv2.imshow('mask',cv_mask)
     # Press Q on keyboard to  exit
