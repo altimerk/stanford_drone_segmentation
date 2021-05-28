@@ -30,11 +30,11 @@ import torch
 import torch.nn as nn
 from torchvision.ops.boxes import batched_nms
 
-from effdet.object_detection import argmax_matcher
-from effdet.object_detection import box_list
-from effdet.object_detection import faster_rcnn_box_coder
-from effdet.object_detection import region_similarity_calculator
-from effdet.object_detection import target_assigner
+from effdet_back.object_detection import argmax_matcher
+from effdet_back.object_detection import box_list
+from effdet_back.object_detection import faster_rcnn_box_coder
+from effdet_back.object_detection import region_similarity_calculator
+from effdet_back.object_detection import target_assigner
 
 # The minimum score to consider a logit for identifying detections.
 MIN_CLASS_SCORE = -5.0
