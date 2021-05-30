@@ -1,6 +1,6 @@
 name, r, g, b
 unlabeled, 0, 0, 0
-paved-area, 128, 64, 128
+paved-area, 148, 148, 148
 dirt, 130, 76, 0
 grass, 0, 102, 0
 gravel, 112, 103, 87
@@ -14,10 +14,10 @@ window, 254, 228, 12
 door, 254, 148, 12
 fence, 190, 153, 153
 fence-pole, 153, 153, 153
-person, 255, 22, 96
+person, 255, 0, 0
 dog, 102, 51, 0
 car, 9, 143, 150
-bicycle, 119, 11, 32
+bicycle, 0,0,255
 tree, 51, 51, 0
 bald-tree, 190, 250, 190
 ar-marker, 112, 150, 146

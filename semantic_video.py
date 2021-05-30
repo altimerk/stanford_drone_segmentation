@@ -22,14 +22,6 @@ with open('class_dict_seg.csv') as csvfile:
         colors[i] = ((int(row[1]),int(row[2]),int(row[3])))
 
 
-def run_wbf(predictions, image_size=512, iou_thr=0.12, skip_box_thr=0.12, weights=None):
-  boxes = [(prediction['boxes'] / (image_size - 1)).tolist() for prediction in predictions]
-  scores = [prediction['scores'].tolist() for prediction in predictions]
-  labels = [prediction['labels'].tolist() for prediction in predictions]
-  boxes, scores, labels = weighted_boxes_fusion(boxes, scores, labels, weights=None, iou_thr=iou_thr,
-                                                skip_box_thr=skip_box_thr)
-  boxes = boxes * (image_size - 1)
-  return boxes, scores, labels
 
 def inf(img):
   t = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
@@ -43,13 +35,13 @@ def inf(img):
   #         output = model(img_patches.to('cuda')).cpu()
   return output
 
-def make_predictions(image, score_threshold=0.12):
-#     images = torch.stack(images).cuda().float()
-    image = image.cuda().float()
+def make_predictions(images, score_threshold=0.15):
+    images = images.cuda().float()
     predictions = []
     with torch.no_grad():
-        det = net(image, torch.tensor([1]*image.shape[0]).float().cuda())
-        for i in range(image.shape[0]):
+        print("shape of input: ",images.shape)
+        det = net(images, torch.tensor([1]*images.shape[0]).float().cuda())
+        for i in range(images.shape[0]):
             boxes = det[i].detach().cpu().numpy()[:,:4]
             scores = det[i].detach().cpu().numpy()[:,4]
             labels = det[i].detach().cpu().numpy()[:,5]
@@ -62,7 +54,17 @@ def make_predictions(image, score_threshold=0.12):
                 'scores': scores[indexes],
                 'labels': labels[indexes]
             })
-    return predictions,det
+    return [predictions],det
+
+def run_wbf(predictions, image_size=512, iou_thr=0.15, skip_box_thr=0.15, weights=None):
+    boxes = [(prediction['boxes']/(image_size-1)).tolist()  for prediction in predictions]
+    scores = [prediction['scores'].tolist()  for prediction in predictions]
+    labels = [prediction['labels'].tolist()  for prediction in predictions]
+    boxes, scores, labels = weighted_boxes_fusion(boxes, scores, labels, weights=None, iou_thr=iou_thr, skip_box_thr=skip_box_thr)
+    boxes = boxes*(image_size-1)
+    return boxes, scores, labels
+
+
 def maskToCV(mask, colors):
   cv_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
   for label, color in colors.items():
@@ -70,7 +72,7 @@ def maskToCV(mask, colors):
   return cv_mask
 
 def load_net(checkpoint_path):
-  config = get_efficientdet_config('tf_efficientdet_d0')
+  config = get_efficientdet_config('tf_efficientdet_d1')
   net = EfficientDet(config, pretrained_backbone=False)
 
   config.num_classes = 6
@@ -88,58 +90,58 @@ def load_net(checkpoint_path):
   return net.cuda()
 
 
-net = load_net('effdet0_loss_055_state_dict.pt')
+net = load_net('effdet1_loss_1_42_batch12_state_dict.pt')
 label_colors = {
-0: (255,0,0),
-1:(0,255,0),
-2: (0,0,255),
- 3: (255,255,0),
-4:(0,255,255),
-5:(255,255,255)
+1: (255, 22, 96),
+2:(0,255,0),
+3: (0,0,255),
+ 4: (255,255,0),
+5:(0,255,255),
+6:(255,255,255)
 }
 t = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
-cap = cv2.VideoCapture('/home/ad/video.mov')
+cap = cv2.VideoCapture('/mnt/r4/aliev/videos/bookstore/video1/video.mov')
 # Check if camera opened successfully
 if (cap.isOpened()== False):
   print("Error opening video stream or file")
-
+frame_num = 0
 # Read until video is completed
 while(cap.isOpened()):
   # Capture frame-by-frame
   ret, frame = cap.read()
-  if ret == True:
-
+  if ret:
+    frame_num=frame_num+1
     # Display the resulting frame
-
-    frame = frame[:1024, :1024]
+    print(frame_num)
+    frame_size = max(1024,frame.shape[0])
+    frame = frame[:frame_size, :frame_size]
+    frame = cv2.resize(frame, (512, 512))
     img = frame
     # img = cv2.resize(img,(512,512))
-    image = t(frame)
-    batch = torch.zeros((4, 3, 512, 512), dtype=torch.float32)
-    batch[0] = image[:, :512, :512]
-    batch[1] = image[:, 512:1024, :512]
-    batch[2] = image[:, :512, 512:1024]
-    batch[3] = image[:, 512:1024, 512:1024]
-    batch = batch.cuda().float()
-    predictions, det = make_predictions(batch)
-    patch = [None, None, None, None]
-    patch[0] = frame[:512, :512]
-    patch[1] = frame[512:1024, :512]
-    patch[2] = frame[:512, 512:1024]
-    patch[3] = frame[512:1024, 512:1024]
+    image = t(frame).unsqueeze(0)
 
-    for i in range(4):
-        boxes, scores, labels = run_wbf([predictions[i]])
-        boxes = boxes.astype(np.int32).clip(min=0, max=511)
-        for box, label in zip(boxes, labels):
-            cv2.rectangle(patch[i], (box[0], box[1]), (box[2], box[3]), label_colors[label], 1)
 
-    cv2.imshow('Frame', frame)
+    predictions,det = make_predictions(image)
+
+
+
     # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     output = inf(img)
     masked = torch.argmax(output, dim=1)
     cv_mask = maskToCV(masked[0], colors)
-    cv2.imshow('mask',cv_mask)
+
+
+    boxes, scores, labels = run_wbf(predictions[0])
+    boxes = boxes.astype(np.int32).clip(min=0, max=511)
+    for box, label in zip(boxes, labels):
+        # cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), label_colors[label], 1)
+        xc = int((box[0]+box[2])/2)
+        yc = int((box[1]+box[3])/2)
+        # (box[0]+box[2])/2, (box[1]+box[3])/2
+        cv2.circle(cv_mask, center=(xc,yc),radius=5,color=label_colors[label], thickness=7)
+    join = np.concatenate([frame, cv_mask],axis=1)
+    cv2.imshow('Frame', join)
+    # cv2.imshow('mask',cv_mask)
     # Press Q on keyboard to  exit
     if cv2.waitKey(2) & 0xFF == ord('q'):
       break
