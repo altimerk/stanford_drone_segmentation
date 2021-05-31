@@ -7,8 +7,11 @@
 3. Подход 3 - поскольку объекты на изображениях достаточно мелкие, заменим боксы, получаемые при детекции крупными точками и будем использовать их в качестве сегментации. полученную карту сегментации объединим с полученной первым способом. там достаточно хорошо выделяются крупные объекты - деревья и т.д. Также можно на этапе постпроцессинга трэчить объекты после детекции, например фильтром калмана.
 
 Ноутбуки для детекции взяты отсюда:
+
 https://www.kaggle.com/shonenkov/training-efficientdet
+
 https://www.kaggle.com/shonenkov/inference-efficientdet
 
-#Demo
+# Demo
+
 python semantic_video.py --semantic_model Unet-Mobilenet.pt --detect_model effdet1_loss_0.7770166422261132_batch12_5000_state_dict.pt --colors_csv class_dict_seg.csv --inp_video video.mov
