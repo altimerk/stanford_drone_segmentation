@@ -8,92 +8,27 @@ from effdet_old.efficientdet import HeadNet
 import gc
 import csv
 import argparse
-
-# parser = argparse.ArgumentParser()
-# parser.add_argument('--', dest='accumulate', action='store_const',
-#                     const=sum, default=max,
-#                     help='sum the integers (default: find the max)')
-#
-# args = parser.parse_args()
+from utils import load_net, semantic_inference, maskToCV, make_predictions, run_wbf
+parser = argparse.ArgumentParser()
+parser.add_argument('--semantic_model', help='path to semantic model dump')
+parser.add_argument('--detect_model', help='path to detection model dump')
+parser.add_argument('--colors_csv', help='path colors dictionary mor semantic map')
+parser.add_argument('--inp_video', help='path to input video file')
+args = parser.parse_args()
 mean = [0.485, 0.456, 0.406]
 std = [0.229, 0.224, 0.225]
-model = torch.load('Unet-Mobilenet.pt')
+model = torch.load(args.semantic_model)
 model.eval()
 
 
 colors = {}
-with open('class_dict_seg.csv') as csvfile:
+with open(args.colors_csv) as csvfile:
     code_reader = csv.reader(csvfile, delimiter=',')
     headers = next(code_reader, None)
     for i, row in enumerate(code_reader):
         colors[i] = ((int(row[1]), int(row[2]), int(row[3])))
 
-
-def inf(img):
-    t = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
-    img = t(img)
-
-    with torch.no_grad():
-        output = model(img.unsqueeze(0).cuda()).cpu()
-    return output
-
-def make_predictions(images, score_threshold=0.15):
-    images = images.cuda().float()
-    predictions = []
-    with torch.no_grad():
-        det = net(images, torch.tensor([1] * images.shape[0]).float().cuda())
-        for i in range(images.shape[0]):
-            boxes = det[i].detach().cpu().numpy()[:, :4]
-            scores = det[i].detach().cpu().numpy()[:, 4]
-            labels = det[i].detach().cpu().numpy()[:, 5]
-            indexes = np.where(scores > score_threshold)[0]
-            boxes = boxes[indexes]
-            boxes[:, 2] = boxes[:, 2] + boxes[:, 0]
-            boxes[:, 3] = boxes[:, 3] + boxes[:, 1]
-            predictions.append({
-                'boxes': boxes[indexes],
-                'scores': scores[indexes],
-                'labels': labels[indexes]
-            })
-    return [predictions], det
-
-def run_wbf(predictions, image_size=512, iou_thr=0.15, skip_box_thr=0.15, weights=None):
-    boxes = [(prediction['boxes'] / (image_size - 1)).tolist() for prediction in predictions]
-    scores = [prediction['scores'].tolist() for prediction in predictions]
-    labels = [prediction['labels'].tolist() for prediction in predictions]
-    boxes, scores, labels = weighted_boxes_fusion(boxes, scores, labels, weights=None, iou_thr=iou_thr,
-                                                  skip_box_thr=skip_box_thr)
-    boxes = boxes * (image_size - 1)
-    return boxes, scores, labels
-
-
-def maskToCV(mask, colors):
-    cv_mask = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
-    for label, color in colors.items():
-        cv_mask[mask == label] = color
-    return cv_mask
-
-
-def load_net(checkpoint_path):
-    config = get_efficientdet_config('tf_efficientdet_d1')
-    net = EfficientDet(config, pretrained_backbone=False)
-
-    config.num_classes = 6
-    config.image_size = 512
-    net.class_net = HeadNet(config, num_outputs=config.num_classes, norm_kwargs=dict(eps=.001, momentum=.01))
-
-    checkpoint = torch.load(checkpoint_path)
-    net.load_state_dict(checkpoint['model_state_dict'])
-
-    del checkpoint
-    gc.collect()
-
-    net = DetBenchEval(net, config)
-    net.eval()
-    return net.cuda()
-
-
-net = load_net('effdet1_loss_1_42_batch12_state_dict.pt')
+net = load_net(args.detect_model)
 label_colors = {
     1: (255, 22, 96),
     2: (0, 255, 0),
@@ -103,7 +38,7 @@ label_colors = {
     6: (255, 255, 255)
 }
 t = T.Compose([T.ToTensor(), T.Normalize(mean, std)])
-cap = cv2.VideoCapture('/mnt/r4/aliev/videos/bookstore/video1/video.mov')
+cap = cv2.VideoCapture(args.inp_video)
 # Check if camera opened successfully
 if (cap.isOpened() == False):
     print("Error opening video stream or file")
@@ -121,17 +56,16 @@ while (cap.isOpened()):
         frame = frame[:frame_size, :frame_size]
         frame = cv2.resize(frame, (512, 512))
         img = frame
-        # img = cv2.resize(img,(512,512))
-        image = t(frame).unsqueeze(0)
+        img_for_detect = frame
+        img_for_detect = cv2.cvtColor(img_for_detect, cv2.COLOR_BGR2RGB).astype(np.float32)
+        img_for_detect /= 255.0
+        tensor = torch.tensor(img_for_detect).permute(2, 0, 1)
+        predictions, det = make_predictions(net, tensor)
 
-        predictions, det = make_predictions(image)
-
-        # img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-        output = inf(img)
+        output = semantic_inference(model, img)
         masked = torch.argmax(output, dim=1)
         cv_mask = maskToCV(masked[0], colors)
-
-        boxes, scores, labels = run_wbf(predictions[0])
+        boxes, scores, labels = run_wbf(predictions,0)
         boxes = boxes.astype(np.int32).clip(min=0, max=511)
         for box, label in zip(boxes, labels):
             # cv2.rectangle(frame, (box[0], box[1]), (box[2], box[3]), label_colors[label], 1)
@@ -145,7 +79,6 @@ while (cap.isOpened()):
         if cv2.waitKey(2) & 0xFF == ord('q'):
             break
 
-    # Break the loop
     else:
         break
 
