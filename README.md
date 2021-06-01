@@ -12,6 +12,15 @@ https://www.kaggle.com/shonenkov/training-efficientdet
 
 https://www.kaggle.com/shonenkov/inference-efficientdet
 
+Для тренировки необходимо установить архивную версию пакета timm:
+
+pip install --no-deps 'timm-0.1.26-py3-none-any.whl' > /dev/null
+
+
+
 # Demo
 
 python semantic_video.py --semantic_model Unet-Mobilenet.pt --detect_model effdet1_loss_0.7770166422261132_batch12_5000_state_dict.pt --colors_csv class_dict_seg.csv --inp_video video.mov
+
+https://youtu.be/Sk1S_fkF6Js
+
